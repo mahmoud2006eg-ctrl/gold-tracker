@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>لوحة متابعة الذهب المحلية</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(212, 175, 55, 0.08), transparent 30%),
+        linear-gradient(180deg, #0b0b0d 0%, #111214 100%);
+      color: #f5f5f5;
+      min-height: 100vh;
+    }
+
+    body.menu-open {
+      overflow: hidden;
+    }
+
+    .container {
+      width: min(1400px, 94%);
+      margin: 0 auto;
+      padding: 20px 0 50px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .brand-box {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .brand-box h1 {
+      margin: 0;
+      font-size: 32px;
+      color: #ffd54a;
+    }
+
+    .brand-box p {
+      margin: 0;
+      color: #9f9f9f;
+      font-size: 14px;
+    }
+
+    .top-update {
+      color: #8d8d8d;
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    .menu-btn {
+      width: 52px;
+      height: 52px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .menu-btn span {
+      display: block;
+      width: 22px;
+      height: 2px;
+      background: #f3d67a;
+      border-radius: 999px;
+    }
+
+    .sidebar-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      opacity: 0;
+      pointer-events: none;
+      transition: 0.25s;
+      z-index: 99;
+    }
+
+    .sidebar-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .sidebar {
+      position: fixed;
+      top: 0;
+      right: -320px;
+      width: 290px;
+      max-width: 86%;
+      height: 100vh;
+      background: #111214;
+      border-left: 1px solid rgba(255,255,255,0.08);
+      z-index: 100;
+      padding: 24px 18px;
+      transition: 0.25s;
+      box-shadow: -10px 0 30px rgba(0,0,0,0.35);
+    }
+
+    .sidebar.active {
+      right: 0;
+    }
+
+    .sidebar-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .sidebar-header h3 {
+      margin: 0;
+      color: #fff;
+      font-size: 20px;
+    }
+
+    .close-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      border: none;
+      background: rgba(255,255,255,0.06);
+      color: white;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .sidebar-links {
+      display: grid;
+      gap: 12px;
+    }
+
+    .sidebar-links a {
+      text-decoration: none;
+      color: #ededed;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px;
+      padding: 14px 16px;
+      font-size: 15px;
+    }
+
+    .hero-card,
+    .card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 24px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(8px);
+      margin-bottom: 18px;
+    }
+
+    .chart-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .chart-title h2,
+    .section-title {
+      margin: 0;
+      font-size: 20px;
+      color: #fff;
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .status-badge {
+      background: rgba(212, 175, 55, 0.12);
+      color: #f0c95b;
+      border: 1px solid rgba(212, 175, 55, 0.2);
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+    }
+
+    .trend-badge {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+
+    .trend-up {
+      background: rgba(53, 208, 127, 0.14);
+      color: #35d07f;
+      border-color: rgba(53, 208, 127, 0.22);
+    }
+
+    .trend-down {
+      background: rgba(255, 95, 95, 0.14);
+      color: #ff5f5f;
+      border-color: rgba(255, 95, 95, 0.22);
+    }
+
+    .trend-neutral {
+      background: rgba(255,255,255,0.08);
+      color: #dadada;
+      border-color: rgba(255,255,255,0.08);
+    }
+
+    .range-switcher,
+    .filter-switcher {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .range-btn,
+    .filter-btn {
+      border: 1px solid rgba(212, 175, 55, 0.18);
+      background: rgba(255, 255, 255, 0.04);
+      color: #d8d8d8;
+      padding: 10px 16px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: 0.2s;
+    }
+
+    .range-btn.active,
+    .filter-btn.active {
+      background: linear-gradient(135deg, #d4af37, #f3d67a);
+      color: #111;
+      border-color: transparent;
+      font-weight: 700;
+    }
+
+    .chart-wrapper {
+      position: relative;
+      height: 420px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    label {
+      color: #cfcfcf;
+      font-size: 14px;
+    }
+
+    input,
+    select {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: white;
+      padding: 14px 15px;
+      border-radius: 14px;
+      outline: none;
+      font-size: 15px;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: rgba(212, 175, 55, 0.55);
+      box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.08);
+    }
+
+    option {
+      background: #111214;
+      color: white;
+    }
+
+    .calc-btn {
+      width: 100%;
+      border: none;
+      cursor: pointer;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #d4af37, #f3d67a);
+      color: #111;
+      font-weight: 700;
+      font-size: 15px;
+      margin-top: 8px;
+    }
+
+    .result-box {
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: 16px;
+      padding: 16px;
+      margin-top: 10px;
+      min-height: 110px;
+    }
+
+    .result-box p {
+      margin: 0;
+      font-size: 15px;
+      color: #d0d0d0;
+      line-height: 1.9;
+      white-space: pre-line;
+    }
+
+    .price-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .price-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .price-row .label {
+      color: #e8e8e8;
+      font-size: 15px;
+    }
+
+    .price-row .value {
+      color: #f0c95b;
+      font-weight: 700;
+      font-size: 15px;
+      white-space: nowrap;
+    }
+
+    .creator-box {
+      display: grid;
+      gap: 12px;
+    }
+
+    .creator-item {
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .creator-item .label {
+      color: #9f9f9f;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .creator-item .value {
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    .profit-positive {
+      color: #35d07f;
+    }
+
+    .profit-negative {
+      color: #ff5f5f;
+    }
+
+    .page-section {
+      display: none;
+    }
+
+    @media (max-width: 700px) {
+      .container {
+        width: min(96%, 96%);
+      }
+
+      .brand-box h1 {
+        font-size: 24px;
+      }
+
+      .chart-wrapper {
+        height: 300px;
+      }
+
+      .card,
+      .hero-card {
+        padding: 16px;
+      }
+
+      .range-switcher,
+      .filter-switcher {
+        gap: 8px;
+      }
+
+      .range-btn,
+      .filter-btn {
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+
+      .price-row {
+        padding: 12px 14px;
+      }
+
+      .price-row .label,
+      .price-row .value {
+        font-size: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h3>القائمة</h3>
+      <button class="close-btn" onclick="closeSidebar()">×</button>
+    </div>
+
+    <div class="sidebar-links">
+      <a href="#" data-section="home">الرئيسية</a>
+      <a href="#" data-section="prices">الأسعار</a>
+      <a href="#" data-section="calculator">الحاسبة</a>
+      <a href="#" data-section="news">الأخبار</a>
+      <a href="#" data-section="creator">منشئ الموقع</a>
+    </div>
+  </aside>
+
+  <div class="container">
+    <div class="topbar">
+      <div class="brand-box">
+        <h1>لوحة متابعة الذهب</h1>
+        <p>الرئيسية فيها الرسم البياني فقط، وباقي الأقسام من القائمة</p>
+        <div class="top-update">آخر تحديث: <span id="lastUpdate">--</span></div>
+      </div>
+
+      <button class="menu-btn" onclick="openSidebar()" aria-label="فتح القائمة">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+
+    <section id="home" class="hero-card page-section">
+      <div class="chart-title">
+        <h2>الرسم البياني المحلي</h2>
+        <div class="status-row">
+          <div class="status-badge">تحديث تلقائي كل 60 ثانية</div>
+          <div id="trendBadge" class="trend-badge trend-neutral">جاري حساب آخر حركة</div>
+          <div id="predictionBadge" class="trend-badge trend-neutral">التوقع: جاري التحليل | غير دقيق</div>
+        </div>
+      </div>
+
+      <div class="range-switcher">
+        <button class="range-btn active" onclick="changeRange('1h', this)">آخر ساعة</button>
+        <button class="range-btn" onclick="changeRange('1d', this)">آخر يوم</button>
+        <button class="range-btn" onclick="changeRange('1w', this)">آخر أسبوع</button>
+        <button class="range-btn" onclick="changeRange('1m', this)">آخر شهر</button>
+        <button class="range-btn" onclick="changeRange('1y', this)">آخر سنة</button>
+      </div>
+
+      <div class="filter-switcher">
+        <button class="filter-btn active" onclick="changeChartMode('all', this)">الكل</button>
+        <button class="filter-btn" onclick="changeChartMode('24', this)">24</button>
+        <button class="filter-btn" onclick="changeChartMode('22', this)">22</button>
+        <button class="filter-btn" onclick="changeChartMode('21', this)">21</button>
+        <button class="filter-btn" onclick="changeChartMode('18', this)">18</button>
+        <button class="filter-btn" onclick="changeChartMode('14', this)">14</button>
+      </div>
+
+      <div class="chart-wrapper">
+        <canvas id="chart"></canvas>
+      </div>
+    </section>
+
+    <section id="prices" class="card page-section">
+      <h2 class="section-title">الأسعار</h2>
+      <div class="price-list" id="karatPricesList"></div>
+      <div class="price-list" id="productsPricesList" style="margin-top: 14px;"></div>
+    </section>
+
+    <section id="calculator" class="card page-section">
+      <h2 class="section-title">الحاسبة</h2>
+
+      <div class="form-group">
+        <label for="purchaseType">نوع الشراء</label>
+        <select id="purchaseType" onchange="onPurchaseTypeChange()">
+          <option value="gram">جرامات</option>
+          <option value="bar">سبيكة</option>
+          <option value="pound">جنيه ذهب</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="karatType">العيار</label>
+        <select id="karatType">
+          <option value="24">عيار 24</option>
+          <option value="22">عيار 22</option>
+          <option value="21" selected>عيار 21</option>
+          <option value="18">عيار 18</option>
+          <option value="14">عيار 14</option>
+        </select>
+      </div>
+
+      <div class="form-group" id="weightGroup">
+        <label for="grams">عدد الجرامات</label>
+        <input id="grams" type="number" placeholder="مثال: 20" value="20" />
+      </div>
+
+      <div class="form-group" id="barGroup" style="display:none;">
+        <label for="barWeight">وزن السبيكة</label>
+        <select id="barWeight">
+          <option value="1">1 جرام</option>
+          <option value="2.5">2.5 جرام</option>
+          <option value="5">5 جرام</option>
+          <option value="10">10 جرام</option>
+          <option value="20">20 جرام</option>
+          <option value="31.1">أونصة 31.1 جرام</option>
+          <option value="50">50 جرام</option>
+          <option value="100">100 جرام</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="buyPricePerUnit">سعر الشراء للوحدة</label>
+        <input id="buyPricePerUnit" type="number" placeholder="مثال: 7110" value="7110" />
+      </div>
+
+      <button class="calc-btn" onclick="calculateProfit()">احسب المكسب</button>
+
+      <div class="result-box">
+        <p id="calcResult">ادخل بياناتك واضغط احسب.</p>
+      </div>
+
+      <div class="result-box" style="margin-top:12px;">
+        <p>
+          <span id="profit" class="profit-positive">--</span><br>
+          <span id="profitNote">بحسب البيانات المدخلة</span>
+        </p>
+      </div>
+    </section>
+
+    <section id="news" class="card page-section">
+      <h2 class="section-title">الأخبار</h2>
+      <div class="price-list" id="newsList">
+        <div class="price-row">
+          <div class="label">جاري تحميل الأخبار...</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="creator" class="card page-section">
+      <h2 class="section-title">منشئ الموقع</h2>
+
+      <div class="creator-box">
+        <div class="creator-item">
+          <div class="label">الاسم</div>
+          <div class="value">محمود محمد الجميعي</div>
+        </div>
+
+        <div class="creator-item">
+          <div class="label">رقم الهاتف</div>
+          <div class="value">01090141553</div>
+        </div>
+
+        <div class="creator-item">
+          <div class="label">وصف</div>
+          <div class="value">مطور الموقع وصاحب فكرة لوحة متابعة الذهب</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
