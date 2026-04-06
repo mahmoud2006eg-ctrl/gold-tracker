@@ -633,6 +633,144 @@
         font-size: 0.74rem;
       }
     }
+    /* تحسين الرئيسية على الموبايل فقط */
+@media (max-width: 768px) {
+  #homeView .hero {
+    margin-bottom: 12px;
+  }
+
+  #homeView .hero-card {
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  #homeView .hero-title h1 {
+    font-size: 1.35rem;
+    line-height: 1.4;
+  }
+
+  #homeView .hero-title p {
+    font-size: 0.88rem;
+    line-height: 1.6;
+    margin-top: 6px;
+  }
+
+  #homeView .badges {
+    gap: 6px;
+  }
+
+  #homeView .badge {
+    min-height: 34px;
+    padding: 7px 10px;
+    font-size: 0.78rem;
+    border-radius: 999px;
+  }
+
+  #homeView .panel-body {
+    padding: 12px;
+  }
+
+  #homeView .section-title {
+    font-size: 1rem;
+    margin-bottom: 4px;
+  }
+
+  #homeView .section-subtitle {
+    font-size: 0.82rem;
+    margin-bottom: 10px;
+  }
+
+  #homeView .controls {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  #homeView .control-group {
+    gap: 6px;
+  }
+
+  #homeView .filter-btn {
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    border-radius: 10px;
+  }
+
+  #homeView .chart-wrap {
+    height: 230px;
+    padding: 8px;
+    border-radius: 14px;
+  }
+
+  #homeView .grid-cards {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  #homeView .mini-card {
+    padding: 10px;
+    border-radius: 12px;
+  }
+
+  #homeView .mini-card h3 {
+    font-size: 0.82rem;
+    margin-bottom: 5px;
+  }
+
+  #homeView .mini-price {
+    font-size: 0.95rem;
+    margin-bottom: 3px;
+  }
+
+  #homeView .mini-delta {
+    font-size: 0.72rem;
+  }
+}
+
+@media (max-width: 480px) {
+  #homeView .hero-card {
+    padding: 10px;
+  }
+
+  #homeView .hero-title h1 {
+    font-size: 1.2rem;
+  }
+
+  #homeView .hero-title p {
+    font-size: 0.8rem;
+  }
+
+  #homeView .badge {
+    min-height: 30px;
+    padding: 6px 8px;
+    font-size: 0.72rem;
+  }
+
+  #homeView .filter-btn {
+    padding: 7px 8px;
+    font-size: 0.74rem;
+  }
+
+  #homeView .chart-wrap {
+    height: 210px;
+  }
+
+  #homeView .mini-card {
+    padding: 8px;
+  }
+
+  #homeView .mini-card h3 {
+    font-size: 0.76rem;
+  }
+
+  #homeView .mini-price {
+    font-size: 0.88rem;
+  }
+
+  #homeView .mini-delta {
+    font-size: 0.68rem;
+  }
+}
   </style>
 </head>
 <body>
