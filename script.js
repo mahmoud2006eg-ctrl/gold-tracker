@@ -1,886 +1,1130 @@
-const LIVE_API_URL = "https://api.gold-api.com/price/XAU/EGP";
+(() => {
+  "use strict";
 
-/*
-  الأخبار هنا معمولة من Google News RSS عبر proxy front-end.
-  لو الـ proxy وقف، الأخبار ممكن متظهرش مؤقتًا.
-*/
-const NEWS_FEED_URL =
-  "https://news.google.com/rss/search?q=" +
-  encodeURIComponent("سعر الذهب في مصر OR gold price Egypt") +
-  "&hl=ar&gl=EG&ceid=EG:ar";
+  const UPDATE_INTERVAL_MS = 60 * 1000;
+  const NEWS_INTERVAL_MS = 15 * 60 * 1000;
+  const OUNCE_TO_GRAM = 31.1034768;
+  const USD_TO_EGP = 50.0;
+  const LOCAL_PREMIUM_PER_GRAM_24 = 550;
+  const GOLD_API_URL = "https://api.gold-api.com/price/XAU";
 
-const CORS_PROXY_URL = "https://api.allorigins.win/get?url=";
-
-const LOCAL_MARKET_PRICES = {
-  24: 8126,
-  22: 7450,
-  21: 7110,
-  18: 6094,
-  14: 4747
-};
-
-const BAR_PREMIUMS = {
-  1: 160,
-  2.5: 320,
-  5: 620,
-  10: 1250,
-  20: 2500,
-  31.1: 3900,
-  50: 6200,
-  100: 11000
-};
-
-const monthNamesAr = [
-  "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
-  "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"
-];
-
-let goldChart;
-let currentRange = "1h";
-let currentChartMode = "all";
-let chartLabels = [];
-let chartSeries = {};
-let spotBaseline = null;
-let currentSection = "home";
-
-function $(id) {
-  return document.getElementById(id);
-}
-
-function setText(id, value) {
-  const el = $(id);
-  if (el) el.innerText = value;
-}
-
-function formatNumber(num) {
-  return Number(num).toLocaleString("en-US", {
-    maximumFractionDigits: 2
-  });
-}
-
-function roundPrice(value) {
-  return Math.round(value);
-}
-
-function getNowTimeString() {
-  return new Date().toLocaleTimeString("ar-EG", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-}
-
-function getGoldPoundPrice() {
-  return roundPrice(LOCAL_MARKET_PRICES[21] * 8 + 840);
-}
-
-function getBarPrice(weight) {
-  const premium = BAR_PREMIUMS[weight] || 0;
-  return roundPrice((LOCAL_MARKET_PRICES[24] * Number(weight)) + premium);
-}
-
-function generateKaratPriceFrom24(price24, karat) {
-  return roundPrice(price24 * (Number(karat) / 24));
-}
-
-function buildBaseSeriesFrom24(base24Array) {
-  return {
-    24: base24Array.map(roundPrice),
-    22: base24Array.map(v => generateKaratPriceFrom24(v, 22)),
-    21: base24Array.map(v => generateKaratPriceFrom24(v, 21)),
-    18: base24Array.map(v => generateKaratPriceFrom24(v, 18)),
-    14: base24Array.map(v => generateKaratPriceFrom24(v, 14))
+  const AVG_WORKMANSHIP_PER_GRAM = {
+    "24": 120,
+    "22": 140,
+    "21": 150,
+    "18": 170,
+    "14": 180
   };
-}
 
-function buildIntradayData(pointsCount, spread, currentPrice, mode) {
-  const labels = [];
-  const prices24 = [];
-  const now = new Date();
+  const AVG_COIN_WORKMANSHIP = {
+    quarter: 100,
+    half: 175,
+    pound: 250
+  };
 
-  for (let i = pointsCount - 1; i >= 0; i--) {
-    const d = new Date(now);
+  const NEWS_FEEDS = [
+    "https://news.google.com/rss/search?q=gold%20price%20OR%20XAU%20OR%20bullion&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=%D8%A7%D9%84%D8%B0%D9%87%D8%A8%20OR%20%D8%A3%D8%B3%D8%B9%D8%A7%D8%B1%20%D8%A7%D9%84%D8%B0%D9%87%D8%A8&hl=ar&gl=EG&ceid=EG:ar"
+  ];
 
-    if (mode === "minute") {
-      d.setMinutes(now.getMinutes() - i * 10);
+  const menuToggle = document.getElementById("menuToggle");
+  const topnav = document.getElementById("topnav");
+  const navLinks = document.querySelectorAll(".nav-link");
+  const viewSections = document.querySelectorAll(".view-section");
+  const categoryButtons = document.querySelectorAll(".category-btn");
+  const priceCategories = document.querySelectorAll(".price-category");
+
+  const els = {
+    chartCanvas: document.getElementById("goldChart"),
+    lastUpdateText: document.getElementById("lastUpdateText"),
+    autoUpdateBadge: document.getElementById("autoUpdateBadge"),
+    changeBadge: document.getElementById("changeBadge"),
+    predictionBadge: document.getElementById("predictionBadge"),
+    statusBadge: document.getElementById("statusBadge"),
+    newsList: document.getElementById("newsList"),
+    refreshNewsBtn: document.getElementById("refreshNewsBtn"),
+
+    caratButtons: document.querySelectorAll("[data-carat]"),
+    rangeButtons: document.querySelectorAll("[data-range]"),
+
+    price24: document.getElementById("price24"),
+    price22: document.getElementById("price22"),
+    price21: document.getElementById("price21"),
+    price18: document.getElementById("price18"),
+    price14: document.getElementById("price14"),
+
+    price24MadeNote: document.getElementById("price24MadeNote"),
+    price22MadeNote: document.getElementById("price22MadeNote"),
+    price21MadeNote: document.getElementById("price21MadeNote"),
+    price18MadeNote: document.getElementById("price18MadeNote"),
+    price14MadeNote: document.getElementById("price14MadeNote"),
+
+    miniPrice24: document.getElementById("miniPrice24"),
+    miniPrice22: document.getElementById("miniPrice22"),
+    miniPrice21: document.getElementById("miniPrice21"),
+    miniPrice18: document.getElementById("miniPrice18"),
+    miniPrice14: document.getElementById("miniPrice14"),
+
+    miniDelta24: document.getElementById("miniDelta24"),
+    miniDelta22: document.getElementById("miniDelta22"),
+    miniDelta21: document.getElementById("miniDelta21"),
+    miniDelta18: document.getElementById("miniDelta18"),
+    miniDelta14: document.getElementById("miniDelta14"),
+
+    ounceUsd: document.getElementById("ounce-usd"),
+
+    bar05: document.getElementById("bar-0.5"),
+    bar1: document.getElementById("bar-1"),
+    bar25: document.getElementById("bar-2.5"),
+    bar5: document.getElementById("bar-5"),
+    bar10: document.getElementById("bar-10"),
+    bar20: document.getElementById("bar-20"),
+    bar311: document.getElementById("bar-31.1"),
+    bar50: document.getElementById("bar-50"),
+    bar100: document.getElementById("bar-100"),
+    bar250: document.getElementById("bar-250"),
+    bar500: document.getElementById("bar-500"),
+    bar1000: document.getElementById("bar-1000"),
+
+    coinQuarter: document.getElementById("coin-quarter"),
+    coinHalf: document.getElementById("coin-half"),
+    coinPound: document.getElementById("coin-pound"),
+
+    coinQuarterMadeNote: document.getElementById("coin-quarter-made-note"),
+    coinHalfMadeNote: document.getElementById("coin-half-made-note"),
+    coinPoundMadeNote: document.getElementById("coin-pound-made-note")
+  };
+
+  let goldChart = null;
+  let selectedCarat = "all";
+  let selectedRange = "hour";
+  let lastOunceUsd = 0;
+  let newsBusy = false;
+
+  let livePrices = {
+    "24": 0,
+    "22": 0,
+    "21": 0,
+    "18": 0,
+    "14": 0
+  };
+
+  let lastFetchedPrices = {
+    "24": 0,
+    "22": 0,
+    "21": 0,
+    "18": 0,
+    "14": 0
+  };
+
+  let lastPriceDiffs = {
+    "24": 0,
+    "22": 0,
+    "21": 0,
+    "18": 0,
+    "14": 0
+  };
+
+  let cachedNews = [];
+
+  let priceHistory = {
+    hour: { "24": [], "22": [], "21": [], "18": [], "14": [], labels: [] },
+    day: { "24": [], "22": [], "21": [], "18": [], "14": [], labels: [] },
+    week: { "24": [], "22": [], "21": [], "18": [], "14": [], labels: [] },
+    month: { "24": [], "22": [], "21": [], "18": [], "14": [], labels: [] },
+    year: { "24": [], "22": [], "21": [], "18": [], "14": [], labels: [] }
+  };
+
+  function formatNumber(num) {
+    return Number(num).toLocaleString("en-US");
+  }
+
+  function formatCurrency(num) {
+    return `${formatNumber(Math.round(num))} ج.م`;
+  }
+
+  function formatUsd(num) {
+    return `$${Number(num).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  }
+
+  function setText(el, text) {
+    if (el) el.textContent = text;
+  }
+
+  function setBadgeState(el, text, type = "neutral") {
+    if (!el) return;
+
+    el.textContent = text;
+    el.classList.remove("state-up", "state-down", "state-neutral", "state-warn");
+
+    if (type === "up") el.classList.add("state-up");
+    else if (type === "down") el.classList.add("state-down");
+    else if (type === "warn") el.classList.add("state-warn");
+    else el.classList.add("state-neutral");
+  }
+
+  function getStorageKey() {
+    return "gold_tracker_local_data_v21";
+  }
+
+  function saveToLocalStorage() {
+    try {
+      localStorage.setItem(
+        getStorageKey(),
+        JSON.stringify({
+          livePrices,
+          lastFetchedPrices,
+          lastPriceDiffs,
+          priceHistory,
+          selectedCarat,
+          selectedRange,
+          lastOunceUsd,
+          cachedNews
+        })
+      );
+    } catch (err) {
+      console.error("خطأ في الحفظ:", err);
+    }
+  }
+
+  function loadFromLocalStorage() {
+    try {
+      const raw = localStorage.getItem(getStorageKey());
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw);
+
+      if (parsed.livePrices) livePrices = parsed.livePrices;
+      if (parsed.lastFetchedPrices) lastFetchedPrices = parsed.lastFetchedPrices;
+      if (parsed.lastPriceDiffs) lastPriceDiffs = parsed.lastPriceDiffs;
+      if (parsed.priceHistory) priceHistory = parsed.priceHistory;
+      if (parsed.selectedCarat) selectedCarat = parsed.selectedCarat;
+      if (parsed.selectedRange) selectedRange = parsed.selectedRange;
+      if (parsed.lastOunceUsd) lastOunceUsd = parsed.lastOunceUsd;
+      if (parsed.cachedNews) cachedNews = parsed.cachedNews;
+    } catch (err) {
+      console.error("خطأ في القراءة:", err);
+    }
+  }
+
+  function showView(viewId) {
+    viewSections.forEach(section => {
+      section.classList.toggle("active", section.id === viewId);
+    });
+
+    navLinks.forEach(link => {
+      link.classList.toggle("active", link.dataset.view === viewId);
+    });
+
+    if (topnav) topnav.classList.remove("open");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function showPriceCategory(categoryName) {
+    priceCategories.forEach(category => {
+      category.classList.toggle("active", category.id === `category-${categoryName}`);
+    });
+
+    categoryButtons.forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.category === categoryName);
+    });
+  }
+
+  function bindNavigation() {
+    if (menuToggle) {
+      menuToggle.addEventListener("click", () => {
+        if (topnav) topnav.classList.toggle("open");
+      });
+    }
+
+    navLinks.forEach(link => {
+      link.addEventListener("click", () => {
+        showView(link.dataset.view);
+      });
+    });
+
+    categoryButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        showPriceCategory(btn.dataset.category);
+      });
+    });
+  }
+
+  function getTimeNowString() {
+    return new Date().toLocaleTimeString("ar-EG", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  }
+
+  function updateLastUpdate() {
+    setText(els.lastUpdateText, `آخر تحديث: ${getTimeNowString()}`);
+    setText(els.autoUpdateBadge, "تحديث تلقائي كل 60 ثانية");
+  }
+
+  function safeArrayPush(arr, value, maxLen) {
+    arr.push(value);
+    while (arr.length > maxLen) arr.shift();
+  }
+
+  function getRangeMaxPoints(range) {
+    switch (range) {
+      case "hour": return 12;
+      case "day": return 24;
+      case "week": return 7;
+      case "month": return 30;
+      case "year": return 12;
+      default: return 12;
+    }
+  }
+
+  function getCaratFactor(carat) {
+    const factors = {
+      "24": 1,
+      "22": 22 / 24,
+      "21": 21 / 24,
+      "18": 18 / 24,
+      "14": 14 / 24
+    };
+    return factors[carat] || 1;
+  }
+
+  function buildLocalPricesFrom24(price24) {
+    return {
+      "24": Math.round(price24),
+      "22": Math.round(price24 * getCaratFactor("22")),
+      "21": Math.round(price24 * getCaratFactor("21")),
+      "18": Math.round(price24 * getCaratFactor("18")),
+      "14": Math.round(price24 * getCaratFactor("14"))
+    };
+  }
+
+  function appendPoint(range, pricesObj, label) {
+    const maxLen = getRangeMaxPoints(range);
+
+    safeArrayPush(priceHistory[range]["24"], pricesObj["24"], maxLen);
+    safeArrayPush(priceHistory[range]["22"], pricesObj["22"], maxLen);
+    safeArrayPush(priceHistory[range]["21"], pricesObj["21"], maxLen);
+    safeArrayPush(priceHistory[range]["18"], pricesObj["18"], maxLen);
+    safeArrayPush(priceHistory[range]["14"], pricesObj["14"], maxLen);
+    safeArrayPush(priceHistory[range].labels, label, maxLen);
+  }
+
+  function seedInitialHistoryIfNeeded() {
+    const hasData = priceHistory.hour["24"] && priceHistory.hour["24"].length > 0;
+    if (hasData) return;
+
+    const base24 = 8100;
+    const basePrices = buildLocalPricesFrom24(base24);
+
+    livePrices = { ...basePrices };
+    lastFetchedPrices = { ...basePrices };
+    lastOunceUsd = 3050;
+
+    for (let i = 11; i >= 0; i--) {
+      const val24 = base24 - 18 + (11 - i) * 2 + (i % 2 === 0 ? 1 : -1);
+      appendPoint("hour", buildLocalPricesFrom24(val24), `${(55 - i * 5).toString().padStart(2, "0")} د`);
+    }
+
+    for (let i = 23; i >= 0; i--) {
+      const val24 = base24 - 35 + (23 - i) * 2;
+      appendPoint("day", buildLocalPricesFrom24(val24), `${24 - i}س`);
+    }
+
+    const weekLabels = ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
+    for (let i = 0; i < 7; i++) {
+      const val24 = base24 - 45 + i * 8;
+      appendPoint("week", buildLocalPricesFrom24(val24), weekLabels[i]);
+    }
+
+    for (let i = 1; i <= 30; i++) {
+      const val24 = base24 - 60 + i * 3;
+      appendPoint("month", buildLocalPricesFrom24(val24), `${i}`);
+    }
+
+    const months = ["ينا", "فبر", "مار", "أبر", "ماي", "يون", "يول", "أغس", "سبت", "أكت", "نوف", "ديس"];
+    for (let i = 0; i < 12; i++) {
+      const val24 = base24 - 220 + i * 20;
+      appendPoint("year", buildLocalPricesFrom24(val24), months[i]);
+    }
+  }
+
+  function updatePersistedChangeBadge() {
+    const diff = Number(lastPriceDiffs["24"] || 0);
+
+    if (diff > 0) {
+      setBadgeState(els.changeBadge, `↑ آخر حركة: +${formatNumber(diff)} جنيه`, "up");
+    } else if (diff < 0) {
+      setBadgeState(els.changeBadge, `↓ آخر حركة: ${formatNumber(diff)} جنيه`, "down");
     } else {
-      d.setHours(now.getHours() - i * 3);
+      setBadgeState(els.changeBadge, "↔ لا يوجد تغير مسجل بعد", "neutral");
+    }
+  }
+
+  function setMiniDelta(el, diff) {
+    if (!el) return;
+
+    if (diff > 0) {
+      el.textContent = `آخر حركة: +${formatNumber(diff)}`;
+      el.style.color = "#22c55e";
+    } else if (diff < 0) {
+      el.textContent = `آخر حركة: ${formatNumber(diff)}`;
+      el.style.color = "#ef4444";
+    } else {
+      el.textContent = "آخر حركة: 0";
+      el.style.color = "#a3a3a3";
+    }
+  }
+
+  function updateGramPrices() {
+    setText(els.price24, formatCurrency(livePrices["24"]));
+    setText(els.price22, formatCurrency(livePrices["22"]));
+    setText(els.price21, formatCurrency(livePrices["21"]));
+    setText(els.price18, formatCurrency(livePrices["18"]));
+    setText(els.price14, formatCurrency(livePrices["14"]));
+
+    setText(els.price24MadeNote, `المصنعية: ${formatCurrency(AVG_WORKMANSHIP_PER_GRAM["24"])}`);
+    setText(els.price22MadeNote, `المصنعية: ${formatCurrency(AVG_WORKMANSHIP_PER_GRAM["22"])}`);
+    setText(els.price21MadeNote, `المصنعية: ${formatCurrency(AVG_WORKMANSHIP_PER_GRAM["21"])}`);
+    setText(els.price18MadeNote, `المصنعية: ${formatCurrency(AVG_WORKMANSHIP_PER_GRAM["18"])}`);
+    setText(els.price14MadeNote, `المصنعية: ${formatCurrency(AVG_WORKMANSHIP_PER_GRAM["14"])}`);
+  }
+
+  function updateMiniGramPrices() {
+    setText(els.miniPrice24, formatCurrency(livePrices["24"]));
+    setText(els.miniPrice22, formatCurrency(livePrices["22"]));
+    setText(els.miniPrice21, formatCurrency(livePrices["21"]));
+    setText(els.miniPrice18, formatCurrency(livePrices["18"]));
+    setText(els.miniPrice14, formatCurrency(livePrices["14"]));
+
+    setMiniDelta(els.miniDelta24, lastPriceDiffs["24"]);
+    setMiniDelta(els.miniDelta22, lastPriceDiffs["22"]);
+    setMiniDelta(els.miniDelta21, lastPriceDiffs["21"]);
+    setMiniDelta(els.miniDelta18, lastPriceDiffs["18"]);
+    setMiniDelta(els.miniDelta14, lastPriceDiffs["14"]);
+  }
+
+  function updateBullionPrices() {
+    const gram24 = Number(livePrices["24"] || 0);
+
+    setText(els.ounceUsd, lastOunceUsd ? formatUsd(lastOunceUsd) : "جاري التحميل...");
+
+    const bars = [
+      { el: els.bar05, grams: 0.5 },
+      { el: els.bar1, grams: 1 },
+      { el: els.bar25, grams: 2.5 },
+      { el: els.bar5, grams: 5 },
+      { el: els.bar10, grams: 10 },
+      { el: els.bar20, grams: 20 },
+      { el: els.bar311, grams: 31.1 },
+      { el: els.bar50, grams: 50 },
+      { el: els.bar100, grams: 100 },
+      { el: els.bar250, grams: 250 },
+      { el: els.bar500, grams: 500 },
+      { el: els.bar1000, grams: 1000 }
+    ];
+
+    bars.forEach(bar => {
+      if (bar.el) {
+        setText(bar.el, formatCurrency(gram24 * bar.grams));
+      }
+    });
+  }
+
+  function updateCoinPrices() {
+    const gram21 = Number(livePrices["21"] || 0);
+
+    const quarterBase = gram21 * 2;
+    const halfBase = gram21 * 4;
+    const poundBase = gram21 * 8;
+
+    setText(els.coinQuarter, formatCurrency(quarterBase));
+    setText(els.coinHalf, formatCurrency(halfBase));
+    setText(els.coinPound, formatCurrency(poundBase));
+
+    setText(els.coinQuarterMadeNote, `المصنعية: ${formatCurrency(AVG_COIN_WORKMANSHIP.quarter)}`);
+    setText(els.coinHalfMadeNote, `المصنعية: ${formatCurrency(AVG_COIN_WORKMANSHIP.half)}`);
+    setText(els.coinPoundMadeNote, `المصنعية: ${formatCurrency(AVG_COIN_WORKMANSHIP.pound)}`);
+  }
+
+  function updateAllPriceDisplays() {
+    updateGramPrices();
+    updateMiniGramPrices();
+    updateBullionPrices();
+    updateCoinPrices();
+    updatePersistedChangeBadge();
+  }
+
+  function applyRealPriceChange(newPrices) {
+    const hadPreviousRealFetch = Object.values(lastFetchedPrices).some(v => Number(v) > 0);
+
+    if (!hadPreviousRealFetch) {
+      livePrices = { ...newPrices };
+      lastFetchedPrices = { ...newPrices };
+      saveToLocalStorage();
+      return;
     }
 
-    labels.push(
-      d.toLocaleTimeString("ar-EG", {
-        hour: "2-digit",
-        minute: "2-digit"
-      })
-    );
+    ["24", "22", "21", "18", "14"].forEach(carat => {
+      const oldVal = Number(lastFetchedPrices[carat] || 0);
+      const newVal = Number(newPrices[carat] || 0);
+      const diff = Math.round(newVal - oldVal);
 
-    const wave = Math.sin(i * 0.9) * spread;
-    const micro = Math.cos(i * 1.35) * (spread * 0.35);
-    const value = currentPrice - (i * spread * 0.25) + wave + micro;
-    prices24.push(roundPrice(value));
-  }
+      if (diff !== 0) {
+        lastPriceDiffs[carat] = diff;
+      }
+    });
 
-  prices24[prices24.length - 1] = roundPrice(currentPrice);
+    livePrices = { ...newPrices };
 
-  return {
-    labels,
-    series: buildBaseSeriesFrom24(prices24)
-  };
-}
+    const changed = ["24", "22", "21", "18", "14"].some(carat => {
+      return Number(newPrices[carat]) !== Number(lastFetchedPrices[carat]);
+    });
 
-function buildWeekData(currentPrice) {
-  const labels = [];
-  const prices24 = [];
-  const dayNames = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-  const now = new Date();
-
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(now.getDate() - i);
-    labels.push(dayNames[d.getDay()]);
-    const wave = Math.sin(i * 0.8) * 22;
-    prices24.push(roundPrice(currentPrice - (6 - i) * 22 + wave));
-  }
-
-  prices24[prices24.length - 1] = roundPrice(currentPrice);
-
-  return {
-    labels,
-    series: buildBaseSeriesFrom24(prices24)
-  };
-}
-
-function buildMonthData(currentPrice) {
-  const labels = [];
-  const prices24 = [];
-
-  for (let i = 5; i >= 0; i--) {
-    const day = 30 - i * 5;
-    labels.push(`يوم ${day}`);
-    const trend = currentPrice - i * 35;
-    const wave = Math.cos(i * 0.7) * 18;
-    prices24.push(roundPrice(trend + wave));
-  }
-
-  prices24[prices24.length - 1] = roundPrice(currentPrice);
-
-  return {
-    labels,
-    series: buildBaseSeriesFrom24(prices24)
-  };
-}
-
-function buildYearData(currentPrice) {
-  const labels = [];
-  const prices24 = [];
-  const now = new Date();
-  const currentMonthIndex = now.getMonth();
-
-  for (let i = 0; i <= currentMonthIndex; i++) {
-    labels.push(monthNamesAr[i]);
-    const monthsRemaining = currentMonthIndex - i;
-    const trend = currentPrice - monthsRemaining * 140;
-    const wave = Math.sin(i * 0.9) * 45;
-    prices24.push(roundPrice(trend + wave));
-  }
-
-  prices24[prices24.length - 1] = roundPrice(currentPrice);
-
-  return {
-    labels,
-    series: buildBaseSeriesFrom24(prices24)
-  };
-}
-
-function generateRangeData() {
-  const local24 = Number(LOCAL_MARKET_PRICES[24]);
-
-  return {
-    "1h": buildIntradayData(6, 10, local24, "minute"),
-    "1d": buildIntradayData(8, 55, local24, "hour"),
-    "1w": buildWeekData(local24),
-    "1m": buildMonthData(local24),
-    "1y": buildYearData(local24)
-  };
-}
-
-function seedInitialData(range = "1h") {
-  const rangesData = generateRangeData();
-  chartLabels = [...rangesData[range].labels];
-  chartSeries = JSON.parse(JSON.stringify(rangesData[range].series));
-}
-
-function getSegmentColor(ctx) {
-  const y1 = ctx.p0.parsed.y;
-  const y2 = ctx.p1.parsed.y;
-  return y2 >= y1 ? "#35d07f" : "#ff5f5f";
-}
-
-function getDatasetsForMode(mode) {
-  const datasetsMap = {
-    24: {
-      label: "عيار 24",
-      data: chartSeries[24],
-      borderColor: "#d4af37",
-      backgroundColor: "rgba(212, 175, 55, 0.15)",
-      borderWidth: 3,
-      pointRadius: 3,
-      pointHoverRadius: 5,
-      fill: false,
-      tension: 0.35,
-      segment: { borderColor: getSegmentColor }
-    },
-    22: {
-      label: "عيار 22",
-      data: chartSeries[22],
-      borderColor: "#89b8ff",
-      backgroundColor: "rgba(137, 184, 255, 0.12)",
-      borderWidth: 2,
-      pointRadius: 3,
-      pointHoverRadius: 5,
-      fill: false,
-      tension: 0.35,
-      segment: { borderColor: getSegmentColor }
-    },
-    21: {
-      label: "عيار 21",
-      data: chartSeries[21],
-      borderColor: "#35d07f",
-      backgroundColor: "rgba(53, 208, 127, 0.12)",
-      borderWidth: 2,
-      pointRadius: 3,
-      pointHoverRadius: 5,
-      fill: false,
-      tension: 0.35,
-      segment: { borderColor: getSegmentColor }
-    },
-    18: {
-      label: "عيار 18",
-      data: chartSeries[18],
-      borderColor: "#ff8a65",
-      backgroundColor: "rgba(255, 138, 101, 0.12)",
-      borderWidth: 2,
-      pointRadius: 3,
-      pointHoverRadius: 5,
-      fill: false,
-      tension: 0.35,
-      segment: { borderColor: getSegmentColor }
-    },
-    14: {
-      label: "عيار 14",
-      data: chartSeries[14],
-      borderColor: "#ba68c8",
-      backgroundColor: "rgba(186, 104, 200, 0.12)",
-      borderWidth: 2,
-      pointRadius: 3,
-      pointHoverRadius: 5,
-      fill: false,
-      tension: 0.35,
-      segment: { borderColor: getSegmentColor }
+    if (changed) {
+      lastFetchedPrices = { ...newPrices };
     }
-  };
 
-  if (mode === "all") {
-    return [datasetsMap[24], datasetsMap[22], datasetsMap[21], datasetsMap[18], datasetsMap[14]];
+    saveToLocalStorage();
   }
 
-  return [datasetsMap[mode]];
-}
+  async function fetchLiveSpotAndSyncLocal() {
+    try {
+      setBadgeState(els.statusBadge, "جاري تحديث السعر...", "neutral");
 
-function updateTrendBadge() {
-  const badge = $("trendBadge");
-  if (!badge) return;
+      const res = await fetch(GOLD_API_URL, {
+        method: "GET",
+        cache: "no-store"
+      });
 
-  let activeSeries = chartSeries[24];
-  if (currentChartMode !== "all" && chartSeries[currentChartMode]) {
-    activeSeries = chartSeries[currentChartMode];
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      const ouncePriceUsd = Number(data.price);
+
+      if (!Number.isFinite(ouncePriceUsd) || ouncePriceUsd <= 0) {
+        throw new Error("السعر الراجع غير صالح");
+      }
+
+      lastOunceUsd = ouncePriceUsd;
+
+      const gramUsd24 = ouncePriceUsd / OUNCE_TO_GRAM;
+      const gramEgp24 = gramUsd24 * USD_TO_EGP;
+      const local24 = gramEgp24 + LOCAL_PREMIUM_PER_GRAM_24;
+      const newPrices = buildLocalPricesFrom24(local24);
+
+      applyRealPriceChange(newPrices);
+
+      const now = new Date();
+      appendPoint("hour", livePrices, now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }));
+      appendPoint("day", livePrices, now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }));
+      appendPoint("week", livePrices, now.toLocaleDateString("ar-EG", { weekday: "short" }));
+      appendPoint("month", livePrices, now.getDate().toString());
+      appendPoint("year", livePrices, now.toLocaleDateString("ar-EG", { month: "short" }));
+
+      updateAllPriceDisplays();
+      updateLastUpdate();
+      updateChart();
+      await updatePredictionAI();
+
+      saveToLocalStorage();
+      setBadgeState(els.statusBadge, "تم التحديث بنجاح", "neutral");
+    } catch (err) {
+      console.error("خطأ في جلب السعر:", err);
+      setBadgeState(els.statusBadge, "تعذر تحديث السعر الآن", "warn");
+      await updatePredictionAI(true);
+    }
   }
 
-  if (!activeSeries || activeSeries.length < 2) {
-    badge.textContent = "آخر حركة: بيانات غير كافية";
-    badge.className = "trend-badge trend-neutral";
-    return;
+  function buildDatasetsForRange(range) {
+    const configMap = {
+      "24": { color: "#e0bc46" },
+      "22": { color: "#9ec5ff" },
+      "21": { color: "#31d67b" },
+      "18": { color: "#ff8a57" },
+      "14": { color: "#bb6bd9" }
+    };
+
+    const caratsToShow = selectedCarat === "all"
+      ? ["24", "22", "21", "18", "14"]
+      : [selectedCarat];
+
+    return caratsToShow.map(carat => ({
+      label: `عيار ${carat}`,
+      data: priceHistory[range][carat] || [],
+      borderColor: configMap[carat].color,
+      pointBackgroundColor: configMap[carat].color,
+      pointBorderColor: configMap[carat].color,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      borderWidth: selectedCarat === "all" ? 2.5 : 4,
+      tension: 0.35,
+      fill: false
+    }));
   }
 
-  const lastValue = activeSeries[activeSeries.length - 1];
-  const prevValue = activeSeries[activeSeries.length - 2];
-  const diff = lastValue - prevValue;
+  function createChart() {
+    if (!els.chartCanvas || typeof Chart === "undefined") return;
 
-  if (diff > 0) {
-    badge.textContent = `↑ كسب +${formatNumber(diff)} جنيه في آخر تحديث`;
-    badge.className = "trend-badge trend-up";
-  } else if (diff < 0) {
-    badge.textContent = `↓ خسر ${formatNumber(Math.abs(diff))} جنيه في آخر تحديث`;
-    badge.className = "trend-badge trend-down";
-  } else {
-    badge.textContent = "→ بدون تغيير في آخر تحديث";
-    badge.className = "trend-badge trend-neutral";
-  }
-}
+    const ctx = els.chartCanvas.getContext("2d");
 
-/*
-  توقع بسيط جدًا وغير دقيق:
-  بيعتمد على متوسط قصير ومتوسط أطول + آخر ميل
-  الهدف منه مؤشر بصري فقط
-*/
-function updatePredictionBadge() {
-  const badge = $("predictionBadge");
-  if (!badge) return;
-
-  let activeSeries = chartSeries[24];
-  if (currentChartMode !== "all" && chartSeries[currentChartMode]) {
-    activeSeries = chartSeries[currentChartMode];
-  }
-
-  if (!activeSeries || activeSeries.length < 4) {
-    badge.textContent = "التوقع: بيانات غير كافية | غير دقيق";
-    badge.className = "trend-badge trend-neutral";
-    return;
-  }
-
-  const last = activeSeries[activeSeries.length - 1];
-  const prev = activeSeries[activeSeries.length - 2];
-
-  const shortSlice = activeSeries.slice(-3);
-  const longSlice = activeSeries.slice(-6);
-
-  const shortAvg = shortSlice.reduce((a, b) => a + b, 0) / shortSlice.length;
-  const longAvg = longSlice.reduce((a, b) => a + b, 0) / longSlice.length;
-  const slope = last - prev;
-
-  if (shortAvg > longAvg && slope >= 0) {
-    badge.textContent = "التوقع: صاعد ↑ | غير دقيق";
-    badge.className = "trend-badge trend-up";
-  } else if (shortAvg < longAvg && slope <= 0) {
-    badge.textContent = "التوقع: هابط ↓ | غير دقيق";
-    badge.className = "trend-badge trend-down";
-  } else {
-    badge.textContent = "التوقع: متذبذب ↔ | غير دقيق";
-    badge.className = "trend-badge trend-neutral";
-  }
-}
-
-function createChart() {
-  const ctx = $("chart");
-  if (!ctx || typeof Chart === "undefined") return;
-
-  goldChart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: chartLabels,
-      datasets: getDatasetsForMode(currentChartMode)
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {
-        mode: "index",
-        intersect: false
+    goldChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: priceHistory[selectedRange].labels,
+        datasets: buildDatasetsForRange(selectedRange)
       },
-      plugins: {
-        legend: {
-          labels: {
-            color: "#d9d9d9",
-            font: { size: 13 }
-          }
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: "nearest",
+          intersect: false
         },
-        tooltip: {
-          backgroundColor: "#17181c",
-          titleColor: "#ffffff",
-          bodyColor: "#e8e8e8",
-          borderColor: "rgba(212, 175, 55, 0.25)",
-          borderWidth: 1,
-          padding: 12,
-          callbacks: {
-            label: function(context) {
-              return `${context.dataset.label}: ${formatNumber(context.raw)} جنيه`;
-            },
-            title: function(context) {
-              return `الفترة: ${context[0].label}`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: {
-          ticks: { color: "#9f9f9f" },
-          grid: { color: "rgba(255,255,255,0.06)" }
-        },
-        y: {
-          ticks: {
-            color: "#9f9f9f",
-            callback: function(value) {
-              return formatNumber(value);
+        plugins: {
+          legend: {
+            display: true,
+            labels: {
+              color: "#d7d7d7",
+              font: {
+                family: "Cairo, sans-serif",
+                size: 13
+              }
             }
           },
-          grid: { color: "rgba(255,255,255,0.06)" }
+          tooltip: {
+            rtl: true,
+            titleFont: { family: "Cairo, sans-serif" },
+            bodyFont: { family: "Cairo, sans-serif" },
+            callbacks: {
+              label(context) {
+                return `${context.dataset.label}: ${formatNumber(context.parsed.y)} ج.م`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: "#bfbfbf",
+              font: { family: "Cairo, sans-serif", size: 11 }
+            },
+            grid: { color: "rgba(255,255,255,0.08)" }
+          },
+          y: {
+            ticks: {
+              color: "#bfbfbf",
+              font: { family: "Cairo, sans-serif", size: 11 },
+              callback(value) {
+                return formatNumber(value);
+              }
+            },
+            grid: { color: "rgba(255,255,255,0.08)" }
+          }
         }
       }
-    }
-  });
-
-  updateTrendBadge();
-  updatePredictionBadge();
-}
-
-function refreshChart() {
-  if (!goldChart) return;
-
-  goldChart.data.labels = chartLabels;
-  goldChart.data.datasets = getDatasetsForMode(currentChartMode);
-  goldChart.update();
-
-  updateTrendBadge();
-  updatePredictionBadge();
-}
-
-function renderKaratPrices() {
-  const karatPricesList = $("karatPricesList");
-  if (!karatPricesList) return;
-
-  const karats = [
-    { label: "جرام عيار 24", value: LOCAL_MARKET_PRICES[24] },
-    { label: "جرام عيار 22", value: LOCAL_MARKET_PRICES[22] },
-    { label: "جرام عيار 21", value: LOCAL_MARKET_PRICES[21] },
-    { label: "جرام عيار 18", value: LOCAL_MARKET_PRICES[18] },
-    { label: "جرام عيار 14", value: LOCAL_MARKET_PRICES[14] }
-  ];
-
-  karatPricesList.innerHTML = karats.map(item => `
-    <div class="price-row">
-      <div class="label">${item.label}</div>
-      <div class="value">${formatNumber(item.value)} جنيه</div>
-    </div>
-  `).join("");
-}
-
-function renderProductsPrices() {
-  const productsPricesList = $("productsPricesList");
-  if (!productsPricesList) return;
-
-  const products = [
-  { label: "سبيكة 1 جرام", value: getBarPrice(1) },
-  { label: "سبيكة 2.5 جرام", value: getBarPrice(2.5) },
-  { label: "سبيكة 5 جرام", value: getBarPrice(5) },
-  { label: "سبيكة 10 جرام", value: getBarPrice(10) },
-  { label: "سبيكة 20 جرام", value: getBarPrice(20) },
-  { label: "أونصة 31.1 جرام", value: getBarPrice(31.1) },
-  { label: "سبيكة 50 جرام", value: getBarPrice(50) },
-  { label: "سبيكة 100 جرام", value: getBarPrice(100) },
-    { label: "🪙 جنيه ذهب", value: getGoldPoundPrice() }
-  ];
-
-  productsPricesList.innerHTML = products.map(item => `
-    <div class="price-row">
-      <div class="label">${item.label}</div>
-      <div class="value">${formatNumber(item.value)} جنيه</div>
-    </div>
-  `).join("");
-}
-
-function updateCards() {
-  setText("price24", `${formatNumber(LOCAL_MARKET_PRICES[24])} جنيه`);
-  setText("price21", `${formatNumber(LOCAL_MARKET_PRICES[21])} جنيه`);
-  setText("goldPoundCard", `${formatNumber(getGoldPoundPrice())} جنيه`);
-  setText("lastUpdate", getNowTimeString());
-}
-
-function onPurchaseTypeChange() {
-  const purchaseType = $("purchaseType")?.value;
-  const weightGroup = $("weightGroup");
-  const barGroup = $("barGroup");
-  const karatType = $("karatType");
-  const buyInput = $("buyPricePerUnit");
-
-  if (!purchaseType || !weightGroup || !barGroup || !karatType || !buyInput) return;
-
-  if (purchaseType === "gram") {
-    weightGroup.style.display = "flex";
-    barGroup.style.display = "none";
-    karatType.disabled = false;
-    buyInput.placeholder = "مثال: 7110 سعر الجرام وقت الشراء";
-    buyInput.value = LOCAL_MARKET_PRICES[Number(karatType.value)];
-  } else if (purchaseType === "bar") {
-    weightGroup.style.display = "none";
-    barGroup.style.display = "flex";
-    karatType.value = "24";
-    karatType.disabled = true;
-    buyInput.placeholder = "مثال: سعر السبيكة كامل وقت الشراء";
-    buyInput.value = getBarPrice(Number($("barWeight")?.value || 1));
-  } else {
-    weightGroup.style.display = "none";
-    barGroup.style.display = "none";
-    karatType.value = "21";
-    karatType.disabled = true;
-    buyInput.placeholder = "مثال: سعر الجنيه الذهب وقت الشراء";
-    buyInput.value = getGoldPoundPrice();
-  }
-
-  calculateProfit();
-}
-
-function calculateProfit() {
-  const purchaseType = $("purchaseType")?.value;
-  const buyPricePerUnit = Number($("buyPricePerUnit")?.value || 0);
-  const karat = Number($("karatType")?.value || 21);
-  const grams = Number($("grams")?.value || 0);
-  const barWeight = Number($("barWeight")?.value || 0);
-  const calcResult = $("calcResult");
-  const profitElement = $("profit");
-  const profitNote = $("profitNote");
-
-  if (!calcResult) return;
-
-  if (!buyPricePerUnit) {
-    calcResult.innerText = "من فضلك ادخل سعر الشراء.";
-    return;
-  }
-
-  let currentValue = 0;
-  let buyTotal = 0;
-  let description = "";
-
-  if (purchaseType === "gram") {
-    if (!grams) {
-      calcResult.innerText = "من فضلك ادخل عدد الجرامات.";
-      return;
-    }
-
-    const currentPricePerGram = LOCAL_MARKET_PRICES[karat];
-    currentValue = currentPricePerGram * grams;
-    buyTotal = buyPricePerUnit * grams;
-    description = `${grams} جرام عيار ${karat}`;
-    if (profitNote) {
-      profitNote.innerText = `${description} | شراء الجرام: ${formatNumber(buyPricePerUnit)} جنيه`;
-    }
-  } else if (purchaseType === "bar") {
-    currentValue = getBarPrice(barWeight);
-    buyTotal = buyPricePerUnit;
-    description = `سبيكة ${barWeight} جرام`;
-    if (profitNote) {
-      profitNote.innerText = `${description} | سعر الشراء الكلي`;
-    }
-  } else {
-    currentValue = getGoldPoundPrice();
-    buyTotal = buyPricePerUnit;
-    description = "جنيه ذهب";
-    if (profitNote) {
-      profitNote.innerText = `${description} | سعر الشراء الكلي`;
-    }
-  }
-
-  const difference = currentValue - buyTotal;
-  const state = difference >= 0 ? "مكسب" : "خسارة";
-
-  if (profitElement) {
-    profitElement.innerText = `${difference >= 0 ? "+" : ""}${formatNumber(difference)} جنيه`;
-    profitElement.classList.remove("profit-positive", "profit-negative");
-    profitElement.classList.add(difference >= 0 ? "profit-positive" : "profit-negative");
-  }
-
-  calcResult.innerText =
-`النوع: ${description}
-القيمة الحالية: ${formatNumber(currentValue)} جنيه
-إجمالي الشراء: ${formatNumber(buyTotal)} جنيه
-${state}: ${difference >= 0 ? "+" : ""}${formatNumber(difference)} جنيه`;
-}
-
-function changeRange(range, clickedButton) {
-  currentRange = range;
-  seedInitialData(range);
-  refreshChart();
-
-  document.querySelectorAll(".range-btn").forEach(btn => {
-    btn.classList.remove("active");
-  });
-
-  if (clickedButton) clickedButton.classList.add("active");
-}
-
-function changeChartMode(mode, clickedButton) {
-  currentChartMode = mode;
-  refreshChart();
-
-  document.querySelectorAll(".filter-btn").forEach(btn => {
-    btn.classList.remove("active");
-  });
-
-  if (clickedButton) clickedButton.classList.add("active");
-}
-
-function pushLivePointForAllKarats() {
-  if (currentRange !== "1h") return;
-
-  const timeLabel = new Date().toLocaleTimeString("ar-EG", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-
-  chartLabels.push(timeLabel);
-  chartSeries[24].push(roundPrice(LOCAL_MARKET_PRICES[24]));
-  chartSeries[22].push(roundPrice(LOCAL_MARKET_PRICES[22]));
-  chartSeries[21].push(roundPrice(LOCAL_MARKET_PRICES[21]));
-  chartSeries[18].push(roundPrice(LOCAL_MARKET_PRICES[18]));
-  chartSeries[14].push(roundPrice(LOCAL_MARKET_PRICES[14]));
-
-  if (chartLabels.length > 20) {
-    chartLabels.shift();
-    chartSeries[24].shift();
-    chartSeries[22].shift();
-    chartSeries[21].shift();
-    chartSeries[18].shift();
-    chartSeries[14].shift();
-  }
-
-  refreshChart();
-}
-
-function updateLocalPricesFromSpot(newSpot) {
-  if (!spotBaseline) {
-    spotBaseline = newSpot;
-    return;
-  }
-
-  const ratio = newSpot / spotBaseline;
-
-  LOCAL_MARKET_PRICES[24] = roundPrice(LOCAL_MARKET_PRICES[24] * ratio);
-  LOCAL_MARKET_PRICES[22] = generateKaratPriceFrom24(LOCAL_MARKET_PRICES[24], 22);
-  LOCAL_MARKET_PRICES[21] = generateKaratPriceFrom24(LOCAL_MARKET_PRICES[24], 21);
-  LOCAL_MARKET_PRICES[18] = generateKaratPriceFrom24(LOCAL_MARKET_PRICES[24], 18);
-  LOCAL_MARKET_PRICES[14] = generateKaratPriceFrom24(LOCAL_MARKET_PRICES[24], 14);
-
-  spotBaseline = newSpot;
-}
-
-async function fetchLiveSpotAndSyncLocal() {
-  try {
-    const response = await fetch(LIVE_API_URL);
-    const data = await response.json();
-
-    const newSpot = data.price ?? data.rate ?? data.value ?? data.ask;
-
-    if (!newSpot || isNaN(newSpot)) {
-      throw new Error("تعذر قراءة السعر من الـ API");
-    }
-
-    if (!spotBaseline) {
-      spotBaseline = Number(newSpot);
-    } else {
-      updateLocalPricesFromSpot(Number(newSpot));
-    }
-
-    updateCards();
-    renderKaratPrices();
-    renderProductsPrices();
-    pushLivePointForAllKarats();
-    calculateProfit();
-    updateTrendBadge();
-    updatePredictionBadge();
-  } catch (error) {
-    console.error("خطأ في جلب السعر:", error);
-  }
-}
-
-function openSidebar() {
-  $("sidebar")?.classList.add("active");
-  $("sidebarOverlay")?.classList.add("active");
-  document.body.classList.add("menu-open");
-}
-
-function closeSidebar() {
-  $("sidebar")?.classList.remove("active");
-  $("sidebarOverlay")?.classList.remove("active");
-  document.body.classList.remove("menu-open");
-}
-
-function showSection(sectionId) {
-  currentSection = sectionId;
-
-  document.querySelectorAll(".page-section").forEach(section => {
-    section.style.display = "none";
-  });
-
-  const target = $(sectionId);
-  if (target) target.style.display = "block";
-
-  closeSidebar();
-}
-
-function setupSectionNavigation() {
-  document.querySelectorAll("[data-section]").forEach(link => {
-    link.addEventListener("click", function(e) {
-      e.preventDefault();
-      const sectionId = this.getAttribute("data-section");
-      showSection(sectionId);
     });
-  });
-}
-
-function decodeHtmlEntities(str) {
-  const txt = document.createElement("textarea");
-  txt.innerHTML = str;
-  return txt.value;
-}
-
-function extractSourceFromTitle(title) {
-  const parts = title.split(" - ");
-  if (parts.length > 1) {
-    return parts[parts.length - 1].trim();
   }
-  return "مصدر خبري";
-}
 
-function formatNewsDate(pubDate) {
-  if (!pubDate) return "تاريخ غير متوفر";
-
-  const d = new Date(pubDate);
-  if (isNaN(d.getTime())) return "تاريخ غير متوفر";
-
-  return d.toLocaleString("ar-EG", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-async function fetchGoldNews() {
-  const newsList = $("newsList");
-  if (!newsList) return;
-
-  newsList.innerHTML = `<div class="price-row"><div class="label">جاري تحميل الأخبار...</div></div>`;
-
-  try {
-    const proxyUrl = `${CORS_PROXY_URL}${encodeURIComponent(NEWS_FEED_URL)}`;
-    const response = await fetch(proxyUrl);
-    const data = await response.json();
-
-    const xmlString = data.contents || data.body || data.data || "";
-    if (!xmlString) {
-      throw new Error("مفيش بيانات أخبار رجعت");
-    }
-
-    const parser = new DOMParser();
-    const xml = parser.parseFromString(xmlString, "text/xml");
-    const items = Array.from(xml.querySelectorAll("item")).slice(0, 8);
-
-    if (!items.length) {
-      newsList.innerHTML = `<div class="price-row"><div class="label">لا توجد أخبار متاحة الآن.</div></div>`;
+  function updateChart() {
+    if (!goldChart) {
+      createChart();
       return;
     }
 
-    newsList.innerHTML = items.map(item => {
-      const title = decodeHtmlEntities(item.querySelector("title")?.textContent || "خبر بدون عنوان");
-      const link = item.querySelector("link")?.textContent || "#";
-      const pubDate = item.querySelector("pubDate")?.textContent || "";
-      const source = extractSourceFromTitle(title);
-      const cleanTitle = title.replace(/\s-\s[^-]+$/, "").trim();
+    goldChart.data.labels = priceHistory[selectedRange].labels;
+    goldChart.data.datasets = buildDatasetsForRange(selectedRange);
+    goldChart.update();
+  }
+
+  function getPredictionSeries() {
+    const carat = selectedCarat === "all" ? "24" : selectedCarat;
+    return (priceHistory[selectedRange][carat] || []).filter(v => Number.isFinite(v));
+  }
+
+  function runFallbackPrediction(series) {
+    if (!series || series.length < 3) {
+      return {
+        state: "neutral",
+        confidence: 50,
+        predicted: series?.[series.length - 1] || 0
+      };
+    }
+
+    const last = series[series.length - 1];
+    const prev = series[series.length - 2];
+    const prev2 = series[series.length - 3];
+
+    const momentum = (last - prev) + (prev - prev2);
+    const predicted = last + momentum * 0.5;
+    const confidence = Math.max(52, Math.min(78, 60 + Math.abs(momentum)));
+
+    if (momentum > 1) {
+      return { state: "up", confidence: Math.round(confidence), predicted };
+    }
+    if (momentum < -1) {
+      return { state: "down", confidence: Math.round(confidence), predicted };
+    }
+
+    return { state: "neutral", confidence: 58, predicted: last };
+  }
+
+  async function runTensorPrediction(series) {
+    if (!window.tf) {
+      throw new Error("TensorFlow.js غير متاح");
+    }
+
+    const cleanSeries = series.filter(v => Number.isFinite(v));
+
+    if (cleanSeries.length < 12) {
+      throw new Error("بيانات غير كافية");
+    }
+
+    const min = Math.min(...cleanSeries);
+    const max = Math.max(...cleanSeries);
+    const scale = max - min || 1;
+
+    const normalized = cleanSeries.map(v => (v - min) / scale);
+    const windowSize = Math.min(6, Math.max(4, Math.floor(normalized.length / 3)));
+
+    const xs = [];
+    const ys = [];
+
+    for (let i = 0; i < normalized.length - windowSize; i++) {
+      xs.push(normalized.slice(i, i + windowSize));
+      ys.push([normalized[i + windowSize]]);
+    }
+
+    if (xs.length < 4) {
+      throw new Error("عينات التدريب قليلة");
+    }
+
+    const xTensor = tf.tensor2d(xs);
+    const yTensor = tf.tensor2d(ys);
+
+    const model = tf.sequential();
+    model.add(tf.layers.dense({
+      inputShape: [windowSize],
+      units: 12,
+      activation: "relu"
+    }));
+    model.add(tf.layers.dense({
+      units: 6,
+      activation: "relu"
+    }));
+    model.add(tf.layers.dense({
+      units: 1
+    }));
+
+    model.compile({
+      optimizer: tf.train.adam(0.02),
+      loss: "meanSquaredError"
+    });
+
+    await model.fit(xTensor, yTensor, {
+      epochs: 25,
+      batchSize: Math.min(8, xs.length),
+      verbose: 0
+    });
+
+    const input = tf.tensor2d([normalized.slice(-windowSize)]);
+    const output = model.predict(input);
+    const predictedNorm = (await output.data())[0];
+    const predicted = predictedNorm * scale + min;
+
+    xTensor.dispose();
+    yTensor.dispose();
+    input.dispose();
+    output.dispose();
+    model.dispose();
+
+    const last = cleanSeries[cleanSeries.length - 1];
+    const diff = predicted - last;
+    const confidence = Math.max(55, Math.min(84, 60 + Math.abs(diff)));
+
+    if (diff > 1) {
+      return { state: "up", confidence: Math.round(confidence), predicted };
+    }
+    if (diff < -1) {
+      return { state: "down", confidence: Math.round(confidence), predicted };
+    }
+
+    return { state: "neutral", confidence: 60, predicted: last };
+  }
+
+  async function updatePredictionAI(forceFallback = false) {
+    try {
+      const series = getPredictionSeries();
+      let result;
+
+      if (forceFallback) {
+        result = runFallbackPrediction(series);
+      } else {
+        try {
+          result = await runTensorPrediction(series);
+        } catch (err) {
+          result = runFallbackPrediction(series);
+        }
+      }
+
+      const predictedText = formatCurrency(result.predicted);
+
+      if (result.state === "up") {
+        setBadgeState(
+          els.predictionBadge,
+          `توقع AI: صعود ${result.confidence}% | التالي ${predictedText}`,
+          "up"
+        );
+      } else if (result.state === "down") {
+        setBadgeState(
+          els.predictionBadge,
+          `توقع AI: هبوط ${result.confidence}% | التالي ${predictedText}`,
+          "down"
+        );
+      } else {
+        setBadgeState(
+          els.predictionBadge,
+          `توقع AI: حركة عرضية ${result.confidence}% | التالي ${predictedText}`,
+          "neutral"
+        );
+      }
+    } catch (err) {
+      console.error("خطأ التوقع:", err);
+      setBadgeState(els.predictionBadge, "توقع AI: تعذر التحليل الآن", "warn");
+    }
+  }
+
+  function bindChartControls() {
+    els.caratButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        els.caratButtons.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        selectedCarat = btn.dataset.carat;
+        updateChart();
+        updatePredictionAI();
+        saveToLocalStorage();
+      });
+    });
+
+    els.rangeButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        els.rangeButtons.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        selectedRange = btn.dataset.range;
+        updateChart();
+        updatePredictionAI();
+        saveToLocalStorage();
+      });
+    });
+  }
+
+  function syncActiveButtons() {
+    els.caratButtons.forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.carat === selectedCarat);
+    });
+
+    els.rangeButtons.forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.range === selectedRange);
+    });
+  }
+
+  function decodeHtmlEntities(str) {
+    const txt = document.createElement("textarea");
+    txt.innerHTML = str;
+    return txt.value;
+  }
+
+  function stripHtml(html) {
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    return (div.textContent || div.innerText || "").trim();
+  }
+
+  function getBestImageFromHtml(html) {
+    if (!html) return "";
+
+    const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (imgMatch && imgMatch[1]) return imgMatch[1];
+
+    return "";
+  }
+
+  function normalizeNewsItem(item) {
+    return {
+      title: decodeHtmlEntities(item.title || "خبر بدون عنوان").trim(),
+      link: item.link || "#",
+      pubDate: item.pubDate || item.pubdate || "",
+      description: stripHtml(item.description || item.content || item.contentSnippet || ""),
+      image: item.image || item.thumbnail || item.enclosure || ""
+    };
+  }
+
+  async function fetchRSSViaRss2Json(feedUrl) {
+    const url = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`;
+    const res = await fetch(url, { cache: "no-store" });
+
+    if (!res.ok) {
+      throw new Error(`rss2json HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+
+    if (data.status !== "ok" || !Array.isArray(data.items)) {
+      throw new Error(data.message || "rss2json invalid response");
+    }
+
+    return data.items.slice(0, 8).map(item => {
+      const normalized = normalizeNewsItem(item);
+
+      if (!normalized.image) {
+        normalized.image = getBestImageFromHtml(item.description || item.content || "");
+      }
+
+      return normalized;
+    });
+  }
+
+  async function fetchTextThroughProxy(url) {
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://r.jina.ai/http://${url.replace(/^https?:\/\//, "")}`
+  ];
+
+  for (const proxyUrl of proxies) {
+    try {
+      const res = await fetch(proxyUrl, { cache: "no-store" });
+      if (!res.ok) continue;
+
+      const text = await res.text();
+      if (
+        text &&
+        text.length > 50 &&
+        (text.includes("<rss") || text.includes("<feed") || text.includes("<item"))
+      ) {
+        return text;
+      }
+    } catch (err) {
+      console.warn("فشل بروكسي:", proxyUrl, err);
+    }
+  }
+
+  throw new Error("تعذر جلب الـ RSS من كل المصادر");
+}
+
+  function extractImageFromItem(item) {
+    const mediaContent = item.querySelector("media\\:content, content");
+    if (mediaContent && mediaContent.getAttribute("url")) {
+      return mediaContent.getAttribute("url");
+    }
+
+    const mediaThumbnail = item.querySelector("media\\:thumbnail");
+    if (mediaThumbnail && mediaThumbnail.getAttribute("url")) {
+      return mediaThumbnail.getAttribute("url");
+    }
+
+    const enclosure = item.querySelector("enclosure");
+    if (enclosure && enclosure.getAttribute("url")) {
+      return enclosure.getAttribute("url");
+    }
+
+    const descriptionHtml = item.querySelector("description")?.textContent || "";
+    const imageFromDescription = getBestImageFromHtml(descriptionHtml);
+    if (imageFromDescription) return imageFromDescription;
+
+    return "";
+  }
+
+  function parseRssItems(xmlText) {
+    const parser = new DOMParser();
+    const xml = parser.parseFromString(xmlText, "text/xml");
+    const items = [...xml.querySelectorAll("item")];
+
+    return items.slice(0, 8).map(item => ({
+      title: decodeHtmlEntities(item.querySelector("title")?.textContent?.trim() || "خبر بدون عنوان"),
+      link: item.querySelector("link")?.textContent?.trim() || "#",
+      pubDate: item.querySelector("pubDate")?.textContent?.trim() || "",
+      description: stripHtml(item.querySelector("description")?.textContent || ""),
+      image: extractImageFromItem(item)
+    }));
+  }
+
+  function getFallbackImageByKeyword(title = "", description = "") {
+    const content = `${title} ${description}`.toLowerCase();
+
+    if (
+      content.includes("gold") ||
+      content.includes("bullion") ||
+      content.includes("xau") ||
+      content.includes("الذهب") ||
+      content.includes("سعر الذهب")
+    ) {
+      return "https://images.unsplash.com/photo-1610375461369-d613b5642ce5?auto=format&fit=crop&w=1200&q=80";
+    }
+
+    return "";
+  }
+
+  function renderNews(items) {
+    if (!els.newsList) return;
+
+    if (!items || !items.length) {
+      els.newsList.innerHTML = `
+        <div class="news-item">
+          <div class="news-body">
+            <h3>لا توجد أخبار متاحة الآن</h3>
+            <p>حاول مرة أخرى بعد قليل.</p>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    els.newsList.innerHTML = items.map(item => {
+      const safeImage = item.image || getFallbackImageByKeyword(item.title, item.description);
 
       return `
-        <a class="news-card" href="${link}" target="_blank" rel="noopener noreferrer">
-          <div class="news-title">${cleanTitle}</div>
-          <div class="news-meta">
-            <span>${source}</span>
-            <span>${formatNewsDate(pubDate)}</span>
+        <article class="news-item">
+          ${safeImage ? `
+            <div class="news-thumb-wrap">
+              <img
+                class="news-thumb"
+                src="${safeImage}"
+                alt="صورة الخبر"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+                onerror="this.parentElement.style.display='none';"
+              >
+            </div>
+          ` : ""}
+
+          <div class="news-body">
+            <h3>${item.title}</h3>
+            <div class="news-meta">${item.pubDate || "تحديث حديث"}</div>
+            <p>${item.description || "اضغط لقراءة الخبر كاملًا."}</p>
+            <a class="news-link" href="${item.link}" target="_blank" rel="noopener noreferrer">قراءة الخبر</a>
           </div>
-        </a>
+        </article>
       `;
     }).join("");
-  } catch (error) {
-    console.error("خطأ في جلب الأخبار:", error);
-    newsList.innerHTML = `
-      <div class="price-row">
-        <div class="label">تعذر تحميل الأخبار حاليًا. جرّب مرة تانية بعد شوية.</div>
-      </div>
-    `;
+  }
+
+  async function fetchSingleFeed(feed) {
+    try {
+      const items = await fetchRSSViaRss2Json(feed);
+      if (items?.length) return items;
+    } catch (err) {
+      console.warn("rss2json failed:", feed, err);
+    }
+
+    const xmlText = await fetchTextThroughProxy(feed);
+    return parseRssItems(xmlText);
+  }
+
+  async function updateNews() {
+    if (newsBusy) return;
+    newsBusy = true;
+
+    if (els.refreshNewsBtn) els.refreshNewsBtn.disabled = true;
+
+    try {
+      if (els.newsList) {
+        els.newsList.innerHTML = `
+          <div class="news-item">
+            <div class="news-body">
+              <h3>جاري تحديث الأخبار...</h3>
+              <p>لحظات ونرجعلك بأحدث الأخبار.</p>
+            </div>
+          </div>
+        `;
+      }
+
+      const allItems = [];
+
+      for (const feed of NEWS_FEEDS) {
+        try {
+          const parsed = await fetchSingleFeed(feed);
+          allItems.push(...parsed);
+        } catch (err) {
+          console.warn("فشل في جلب feed:", feed, err);
+        }
+      }
+
+      const uniqueMap = new Map();
+
+      allItems.forEach(item => {
+        const key = `${item.title}|${item.link}`;
+        if (!uniqueMap.has(key)) {
+          uniqueMap.set(key, item);
+        }
+      });
+
+      cachedNews = [...uniqueMap.values()]
+        .filter(item => item.title && item.link)
+        .slice(0, 10);
+
+      if (cachedNews.length) {
+        renderNews(cachedNews);
+        saveToLocalStorage();
+      } else {
+        throw new Error("لم يتم العثور على أخبار");
+      }
+    } catch (err) {
+      console.error("خطأ الأخبار:", err);
+
+      if (cachedNews.length) {
+        renderNews(cachedNews);
+      } else if (els.newsList) {
+        els.newsList.innerHTML = `
+          <div class="news-item">
+            <div class="news-body">
+              <h3>تعذر تحميل الأخبار</h3>
+              <p>حاول مرة أخرى بعد قليل.</p>
+            </div>
+          </div>
+        `;
+      }
+    } finally {
+      newsBusy = false;
+      if (els.refreshNewsBtn) els.refreshNewsBtn.disabled = false;
+    }
+  }
+
+  function bindNewsRefresh() {
+    if (els.refreshNewsBtn) {
+      els.refreshNewsBtn.addEventListener("click", updateNews);
+    }
+  }
+
+  function bindNewsRefresh() {
+  if (els.refreshNewsBtn) {
+    els.refreshNewsBtn.addEventListener("click", updateNews);
   }
 }
 
-function bindRangeButtons() {
-  document.querySelectorAll(".range-btn").forEach(btn => {
-    btn.addEventListener("click", function() {
-      const range = this.dataset.range;
-      if (!range) return;
-      changeRange(range, this);
-    });
-  });
-}
-
-function bindFilterButtons() {
-  document.querySelectorAll(".filter-btn").forEach(btn => {
-    btn.addEventListener("click", function() {
-      const mode = this.dataset.mode;
-      if (!mode) return;
-      changeChartMode(mode, this);
-    });
-  });
-}
-
-function bindCalcInputs() {
-  $("purchaseType")?.addEventListener("change", onPurchaseTypeChange);
-  $("karatType")?.addEventListener("change", onPurchaseTypeChange);
-  $("barWeight")?.addEventListener("change", onPurchaseTypeChange);
-
-  $("grams")?.addEventListener("input", calculateProfit);
-  $("buyPricePerUnit")?.addEventListener("input", calculateProfit);
-  $("barWeight")?.addEventListener("input", calculateProfit);
-  $("karatType")?.addEventListener("input", calculateProfit);
-
-  $("calcBtn")?.addEventListener("click", calculateProfit);
-}
-
-function bindSidebarEvents() {
-  $("menuToggle")?.addEventListener("click", openSidebar);
-  $("closeSidebarBtn")?.addEventListener("click", closeSidebar);
-  $("sidebarOverlay")?.addEventListener("click", closeSidebar);
-}
-
-function setDefaultActiveButtons() {
-  const defaultRangeBtn = document.querySelector(`.range-btn[data-range="${currentRange}"]`);
-  const defaultFilterBtn = document.querySelector(`.filter-btn[data-mode="${currentChartMode}"]`);
-
-  defaultRangeBtn?.classList.add("active");
-  defaultFilterBtn?.classList.add("active");
-}
-
-function initApp() {
-  seedInitialData(currentRange);
-  updateCards();
-  renderKaratPrices();
-  renderProductsPrices();
+function init() {
+  loadFromLocalStorage();
+  seedInitialHistoryIfNeeded();
+  bindNavigation();
+  bindChartControls();
+  bindNewsRefresh();
+  syncActiveButtons();
+  showPriceCategory("grams");
+  updateAllPriceDisplays();
+  updateLastUpdate();
   createChart();
-  setupSectionNavigation();
-  bindRangeButtons();
-  bindFilterButtons();
-  bindCalcInputs();
-  bindSidebarEvents();
-  setDefaultActiveButtons();
-  onPurchaseTypeChange();
-  calculateProfit();
-  showSection("home");
-  fetchGoldNews();
+  updatePredictionAI();
+
+  if (cachedNews.length) {
+    renderNews(cachedNews);
+  } else {
+    updateNews();
+  }
+
   fetchLiveSpotAndSyncLocal();
-
-  setInterval(() => {
-    updateCards();
-  }, 1000);
-
-  setInterval(() => {
-    fetchLiveSpotAndSyncLocal();
-  }, 60000);
-
-  setInterval(() => {
-    fetchGoldNews();
-  }, 300000);
+  setInterval(fetchLiveSpotAndSyncLocal, UPDATE_INTERVAL_MS);
+  setInterval(updateNews, NEWS_INTERVAL_MS);
 }
 
-document.addEventListener("DOMContentLoaded", initApp);
-
-// علشان تقدر تناديهم من الـ HTML لو مستخدم onclick
-window.changeRange = changeRange;
-window.changeChartMode = changeChartMode;
-window.calculateProfit = calculateProfit;
-window.openSidebar = openSidebar;
-window.closeSidebar = closeSidebar;
-window.showSection = showSection;
+document.addEventListener("DOMContentLoaded", init);
+})();
